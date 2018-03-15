@@ -3720,6 +3720,8 @@ static void
 riscv_restore_reg (rtx reg, rtx mem)
 {
   rtx insn = riscv_emit_move (reg, mem);
+  // and write it back so that any tags on the stack will be cleared
+  // riscv_emit_move (mem, reg);
   rtx dwarf = NULL_RTX;
   dwarf = alloc_reg_note (REG_CFA_RESTORE, reg, dwarf);
 
@@ -4058,7 +4060,24 @@ riscv_expand_epilogue (int style)
 
   /* Restore the registers.  */
   riscv_for_each_saved_reg (frame->total_size - step2, riscv_restore_reg,
-			    true, style == EXCEPTION_RETURN);
+									 true, style == EXCEPTION_RETURN);
+  /* Write over the saved registers to ensure and FRAME tags are removed. */
+  riscv_for_each_saved_reg (frame->total_size - step2, riscv_save_reg,
+									 true, style == EXCEPTION_RETURN);
+  /* If we spilled varargs to the stack, write over those as well. */
+  if (cfun->machine->varargs_size)
+    {
+      HOST_WIDE_INT v_offset = cfun->machine->varargs_size;
+//      HOST_WIDE_INT base_v_offset = frame->arg_pointer_offset - step2;
+//      HOST_WIDE_INT base_v_offset = frame->arg_pointer_offset - step2;
+      HOST_WIDE_INT base_v_offset = frame->arg_pointer_offset - (frame->total_size - step2);
+//      HOST_WIDE_INT base_v_offset = frame->arg_pointer_offset;
+      while (v_offset) {
+	riscv_save_restore_reg(word_mode, GP_REG_FIRST,
+			       base_v_offset - v_offset, riscv_save_reg);
+	v_offset -= UNITS_PER_WORD;
+      }
+  }
 
   if (use_restore_libcall)
     {

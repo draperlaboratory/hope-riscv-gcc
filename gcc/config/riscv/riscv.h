@@ -123,7 +123,8 @@ along with GCC; see the file COPYING3.  If not see
 #define PARM_BOUNDARY BITS_PER_WORD
 
 /* Allocation boundary (in *bits*) for the code of a function.  */
-#define FUNCTION_BOUNDARY (TARGET_RVC ? 16 : 32)
+/*#define FUNCTION_BOUNDARY (TARGET_RVC ? 16 : 32) */
+#define FUNCTION_BOUNDARY (64)
 
 /* The smallest supported stack boundary the calling convention supports.  */
 #define STACK_BOUNDARY \

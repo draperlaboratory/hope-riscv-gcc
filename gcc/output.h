@@ -500,6 +500,7 @@ union GTY ((desc ("SECTION_STYLE (&(%h))"), for_user)) section {
 struct object_block;
 
 /* Special well-known sections.  */
+extern GTY(()) section *text_meta_data_section;
 extern GTY(()) section *text_section;
 extern GTY(()) section *data_section;
 extern GTY(()) section *readonly_data_section;

@@ -203,6 +203,174 @@ bool final_insns_dump_p;
 /* True if profile_function should be called, but hasn't been called yet.  */
 static bool need_profile_function;
 
+class dover_meta_data_label_t {
+ public:
+ dover_meta_data_label_t(const char *prefix) : prefix(prefix), labelno(label_counter++) { }
+ dover_meta_data_label_t(dover_meta_data_label_t const &r) : prefix(r.prefix), labelno(r.labelno) { }
+  void render(FILE *stream) const {
+    fprintf(stream, "%s%d", prefix, labelno);
+  }
+  void render_as_target(FILE *stream) {
+    render(stream);
+    fprintf(stream, ":\n");
+  }
+ private:
+  static int label_counter;
+  const char *prefix;
+  int labelno;
+};
+
+int dover_meta_data_label_t::label_counter = 0;
+
+#define DMD_SET_BASE_ADDRESS_OP 1u
+#define DMD_TAG_ADDRESS_OP 2u
+#define DMD_TAG_ADDRESS_RANGE_OP 3u
+#define DMD_END_BLOCK 8u
+#define DMD_END_BLOCK_WEAK_DECL_HACK 9u
+
+#define DMT_CFI3L_VALID_TGT 1u
+#define DMT_STACK_PROLOGUE_AUTHORITY 2u
+#define DMT_STACK_EPILOGUE_AUTHORITY 3u
+
+class dmd_renderer_t {
+  FILE *fp;
+  const char *fnname;
+ public:
+  void render_unsigned(unsigned v) {
+#ifdef HAVE_AS_LEB128
+    fprintf(fp, "\t.uleb128 %d\n", v);
+#else
+    fprintf(fp, "\t.byte %d\n", v);
+#endif
+  }
+  
+  void render_unsigned32(unsigned v) {
+    fprintf(fp, "\t.word %d\n", v);
+  }
+  
+  void render_base_op(unsigned op) {
+    render_unsigned(op);
+  }
+
+  void render_tag(unsigned tag) {
+    render_unsigned(tag);
+  }
+  
+  void render_fn_relative_offset(dover_meta_data_label_t const *label) {
+#if 1
+#ifdef HAVE_AS_LEB128
+    fprintf(fp, "\t.uleb128 ");
+#else
+    fprintf(fp, "\t.word ");
+#endif
+    label->render(fp);
+    fprintf(fp, " - %s\n", fnname);
+#else
+    fprintf(fp, ".set .L_DMD_SIZE_");
+    label->render(fp);
+    fprintf(fp, ", ");
+    label->render(fp);
+    fprintf(fp, " - %s\n", fnname);
+    fprintf(fp, "\t.word .L_DMD_SIZE_");
+    label->render(fp);
+    fprintf(fp, "\n");
+#endif
+  }
+
+  void start_function(FILE *fp) {
+    this->fp = fp;
+    
+    // set the base address for subsequent ops
+    render_base_op(DMD_SET_BASE_ADDRESS_OP);
+    fnname = get_fnname_from_decl (current_function_decl);
+    fprintf(fp, "\t.dword %s\n", fnname);
+  }
+
+  void end_function(FILE *fp, dover_meta_data_label_t const *l) {
+    if (l) {
+      render_base_op(DMD_END_BLOCK);
+      render_fn_relative_offset(l);
+    } else {
+      render_base_op(DMD_END_BLOCK_WEAK_DECL_HACK);
+      fprintf(fp, "\t.asciz\t\"%s\"\n", get_fnname_from_decl (current_function_decl));
+    }
+#if 0
+    fprintf(fp, "\t.dword\t");
+    l->render(fp);
+    fnname = get_fnname_from_decl (current_function_decl);
+    fprintf(fp, " - %s\n", fnname);
+#endif
+  }
+};
+
+class dover_meta_data_op_t {
+ public:
+  virtual void render(dmd_renderer_t *r) = 0;
+};
+
+class dmd_point_op_t : public dover_meta_data_op_t {
+ public:
+ dmd_point_op_t(dover_meta_data_label_t *addr) : addr(addr) { }
+  ~dmd_point_op_t() { delete addr; }
+ protected:
+  dover_meta_data_label_t *addr;
+};
+
+class dmd_ranged_op_t : public dover_meta_data_op_t {
+ protected:
+  dover_meta_data_label_t *start;
+  dover_meta_data_label_t *end;
+ public:
+  void set_start(dover_meta_data_label_t *l) { start = l; }
+  void set_end(dover_meta_data_label_t *l) { end = l; }
+};
+
+class dmdop_func_start_t : public dover_meta_data_op_t {
+ public:
+  void render(dmd_renderer_t *r) {
+    // function start is a valid CFI target
+    r->render_base_op(DMD_TAG_ADDRESS_OP);
+    r->render_unsigned32(0); // FIXME - should be uleb128, but we are stuck for now
+    r->render_tag(DMT_CFI3L_VALID_TGT);
+  }
+};
+
+class dmdop_prologue_auth_t : public dmd_ranged_op_t {
+ public:
+  void render(dmd_renderer_t *r) {
+    r->render_base_op( DMD_TAG_ADDRESS_RANGE_OP);
+    r->render_fn_relative_offset(start);
+    r->render_fn_relative_offset(end);
+    r->render_tag(DMT_STACK_PROLOGUE_AUTHORITY);
+  }
+};
+
+class dmdop_epilogue_auth_t : public dmd_ranged_op_t {
+ public:
+  void render(dmd_renderer_t *r) {
+    r->render_base_op( DMD_TAG_ADDRESS_RANGE_OP);
+    r->render_fn_relative_offset(start);
+    r->render_fn_relative_offset(end);
+    r->render_tag(DMT_STACK_EPILOGUE_AUTHORITY);
+  }
+};
+
+class dmdop_cfi_tgt_t : public dmd_point_op_t {
+ public:
+ dmdop_cfi_tgt_t(dover_meta_data_label_t *l) : dmd_point_op_t(l) { }
+  void render(dmd_renderer_t *r) {
+    r->render_base_op(DMD_TAG_ADDRESS_OP);
+    r->render_fn_relative_offset(addr);
+    r->render_tag(DMT_CFI3L_VALID_TGT);
+  }
+};
+
+dmdop_prologue_auth_t *dmd_prologue_authority;
+dmdop_epilogue_auth_t *dmd_epilogue_authority;
+bool past_prologue;
+
+static vec<dover_meta_data_op_t *> dover_meta_data_ops;
+
 static int asm_insn_count (rtx);
 static void profile_function (FILE *);
 static void profile_after_prologue (FILE *);
@@ -1755,6 +1923,113 @@ in_initial_view_p (rtx_insn *insn)
 	      || NOTE_KIND (insn) == NOTE_INSN_DELETED));
 }
 
+static void
+cfi_3tag_mark_target_instruction(FILE *stream)
+{
+  dover_meta_data_label_t *l = new dover_meta_data_label_t(".Lcfi3t_tgt__");
+  l->render_as_target(stream);
+  dmdop_cfi_tgt_t *op = new dmdop_cfi_tgt_t(l);
+  dover_meta_data_ops.safe_push(op);
+  //  info.render(stdout);
+  //  printf("\n");
+}
+
+static void
+cfi_3tag_mark_source_instruction(FILE *stream, int is_target)
+{
+  if (is_target)
+    cfi_3tag_mark_target_instruction(stream);
+}
+
+static void
+stack_policy_note_prologue_inst(FILE *stream) {
+  if (!dmd_prologue_authority) {
+    dmd_prologue_authority = new dmdop_prologue_auth_t();
+    dover_meta_data_label_t *l = new dover_meta_data_label_t(".Lstack_policy_prologue_");
+    l->render_as_target(stream);
+    dmd_prologue_authority->set_start(l);
+    dover_meta_data_ops.safe_push(dmd_prologue_authority);
+  }
+}
+
+static void
+stack_policy_note_non_prologue_inst(FILE *stream) {
+  if (dmd_prologue_authority) {
+    dover_meta_data_label_t *l = new dover_meta_data_label_t(".Lstack_policy_prologue_");
+    l->render_as_target(stream);
+    dmd_prologue_authority->set_end(l);
+    dmd_prologue_authority = NULL;
+  }
+}
+
+static void
+stack_policy_mark_end_prologue(FILE *stream)
+{
+  stack_policy_note_non_prologue_inst(stream);
+}
+
+static void
+stack_policy_note_epilogue_inst(FILE *stream) {
+  if (!dmd_epilogue_authority) {
+    dmd_epilogue_authority = new dmdop_epilogue_auth_t();
+    dover_meta_data_label_t *l = new dover_meta_data_label_t(".Lstack_policy_epilogue_");
+    l->render_as_target(stream);
+    dmd_epilogue_authority->set_start(l);
+    dover_meta_data_ops.safe_push(dmd_epilogue_authority);
+  }
+}
+
+static void
+stack_policy_note_non_epilogue_inst(FILE *stream) {
+  if (dmd_epilogue_authority) {
+    dover_meta_data_label_t *l = new dover_meta_data_label_t(".Lstack_policy_epilogue_");
+    l->render_as_target(stream);
+    dmd_epilogue_authority->set_end(l);
+    dmd_epilogue_authority = NULL;
+  }
+}
+
+static int next_insn_is_target = 0;
+static void
+cfi_3tag_internal_label(FILE *stream, const char *prefix, long labelno)
+{
+  cfi_3tag_mark_target_instruction(stream);
+  next_insn_is_target = 0;
+}
+
+dmd_renderer_t dmd_renderer;
+
+static void
+flush_dover_meta_data(FILE *stream)
+{
+  gcc_assert(!dmd_prologue_authority);
+  // make sure that the epilogue gets closed out
+  stack_policy_note_non_epilogue_inst(asm_out_file);
+  dover_meta_data_label_t *l = NULL;
+  if (!DECL_WEAK (current_function_decl)) {
+    l = new dover_meta_data_label_t(".Ldmd_end_function_");
+    l->render_as_target(stream);
+  }
+//  dover_meta_data_label_t *l = new dover_meta_data_label_t(".Ldmd_end_function_");
+//  l->render_as_target(stream);
+  
+  switch_to_section (text_meta_data_section);
+  
+  dmd_renderer.start_function(stream);
+  dmdop_func_start_t func_start;
+
+  func_start.render(&dmd_renderer);
+  unsigned ix;
+  dover_meta_data_op_t *op;
+  FOR_EACH_VEC_ELT(dover_meta_data_ops, ix, op)
+  {
+    op->render(&dmd_renderer);
+  }
+
+  dmd_renderer.end_function(stream, l);
+  switch_to_section (current_function_section ());
+}
+
 /* Output assembler code for the start of a function,
    and initialize some of the variables in this file
    for the new function.  The label for the function and associated
@@ -1767,6 +2042,8 @@ in_initial_view_p (rtx_insn *insn)
    require us to emit it at the current PC.
    OPTIMIZE_P is nonzero if we should eliminate redundant
      test and compare insns.  */
+
+extern void dump_frame_info(FILE *file);
 
 static void
 final_start_function_1 (rtx_insn **firstp, FILE *file, int *seen,
@@ -1785,6 +2062,10 @@ final_start_function_1 (rtx_insn **firstp, FILE *file, int *seen,
 
   high_block_linenum = high_function_linenum = last_linenum;
 
+  //  dump_frame_info(file);
+  dover_meta_data_ops.create(0);
+  past_prologue = false;
+  
   if (flag_sanitize & SANITIZE_ADDRESS)
     asan_function_start ();
 
@@ -1811,6 +2092,8 @@ final_start_function_1 (rtx_insn **firstp, FILE *file, int *seen,
   if (crtl->uses_only_leaf_regs)
     leaf_renumber_regs (first);
 #endif
+
+  next_insn_is_target = 0;
 
   /* The Sun386i and perhaps other machines don't work right
      if the profiling code comes after the prologue.  */
@@ -1871,6 +2154,8 @@ final_start_function_1 (rtx_insn **firstp, FILE *file, int *seen,
 
   /* First output the function prologue: code to set up the stack frame.  */
   targetm.asm_out.function_prologue (file);
+
+  //  stack_policy_mark_end_prologue(file);
 
   /* If the machine represents the prologue as RTL, the profiling code must
      be emitted when NOTE_INSN_PROLOGUE_END is scanned.  */
@@ -1965,6 +2250,9 @@ final_end_function (void)
     dwarf2out_end_epilogue (last_linenum, last_filename);
 
   some_local_dynamic_name = 0;
+  ASM_OUTPUT_ALIGN(asm_out_file, 3);
+  flush_dover_meta_data(asm_out_file);
+  dover_meta_data_ops.release();
 }
 
 
@@ -2256,6 +2544,17 @@ final_scan_insn_1 (rtx_insn *insn, FILE *file, int optimize_p ATTRIBUTE_UNUSED,
   if (insn->deleted ())
     return NEXT_INSN (insn);
 
+  if (RTX_FRAME_RELATED_P (insn))
+    if (past_prologue)
+      stack_policy_note_epilogue_inst(asm_out_file);
+    else
+      stack_policy_note_prologue_inst(asm_out_file);
+  else
+    if (past_prologue)
+      stack_policy_note_non_epilogue_inst(asm_out_file);
+    else
+      stack_policy_note_non_prologue_inst(asm_out_file);
+
   switch (GET_CODE (insn))
     {
     case NOTE:
@@ -2337,6 +2636,8 @@ final_scan_insn_1 (rtx_insn *insn, FILE *file, int optimize_p ATTRIBUTE_UNUSED,
 	  break;
 
 	case NOTE_INSN_PROLOGUE_END:
+	  //	  stack_policy_mark_end_prologue(file);
+	  past_prologue = true;
 	  targetm.asm_out.function_end_prologue (file);
 	  profile_after_prologue (file);
 
@@ -2579,16 +2880,23 @@ final_scan_insn_1 (rtx_insn *insn, FILE *file, int optimize_p ATTRIBUTE_UNUSED,
 
 #ifdef ASM_OUTPUT_CASE_LABEL
 	  ASM_OUTPUT_CASE_LABEL (file, "L", CODE_LABEL_NUMBER (insn), table);
+	  if (in_section->common.flags & SECTION_CODE)
+	    cfi_3tag_internal_label(file, "L", CODE_LABEL_NUMBER(insn));
 #else
 	  targetm.asm_out.internal_label (file, "L", CODE_LABEL_NUMBER (insn));
 #endif
 #endif
 	  break;
 	}
-      if (LABEL_ALT_ENTRY_P (insn))
+      if (LABEL_ALT_ENTRY_P (insn)) {
+	//	printf("alt entry\n");
 	output_alternate_entry_point (file, insn);
+      }
       else
-	targetm.asm_out.internal_label (file, "L", CODE_LABEL_NUMBER (insn));
+	{
+	  cfi_3tag_internal_label(file, "L", CODE_LABEL_NUMBER(insn));
+	  targetm.asm_out.internal_label (file, "L", CODE_LABEL_NUMBER (insn));
+        }
       break;
 
     default:
@@ -3104,11 +3412,20 @@ final_scan_insn_1 (rtx_insn *insn, FILE *file, int optimize_p ATTRIBUTE_UNUSED,
 
 	NOTICE_UPDATE_CC (body, insn);
 #endif
+	if (JUMP_P(insn) || CALL_P(insn)) {
+	  cfi_3tag_mark_source_instruction(file, next_insn_is_target);
+	  next_insn_is_target = 1;
+	} else if (next_insn_is_target) {
+	  cfi_3tag_mark_target_instruction(file);
+	  next_insn_is_target = 0;
+	}
 
 	current_output_insn = debug_insn = insn;
 
 	/* Find the proper template for this insn.  */
 	templ = get_insn_template (insn_code_number, insn);
+	//	if (templ)
+	//	  printf("templ = '%s'\n", templ);
 
 	/* If the C code returns 0, it means that it is a jump insn
 	   which follows a deleted test insn, and that test insn

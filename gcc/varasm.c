@@ -125,6 +125,7 @@ static void mark_weak (tree);
 static void output_constant_pool (const char *, tree);
 static void handle_vtv_comdat_section (section *, const_tree);
 
+section *text_meta_data_section;
 /* Well-known sections, each one associated with some sort of *_ASM_OP.  */
 section *text_section;
 section *data_section;
@@ -6279,6 +6280,9 @@ init_varasm_once (void)
   bss_noswitch_section = get_noswitch_section (SECTION_WRITE | SECTION_BSS,
 					       emit_bss);
 #endif
+
+  text_meta_data_section = get_unnamed_section (0, output_section_asm_op,
+					       "\t.section\t.dover_metadata,\"\",@progbits");
 
   targetm.asm_out.init_sections ();
 
