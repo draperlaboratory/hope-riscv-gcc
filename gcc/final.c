@@ -236,11 +236,11 @@ class dmd_renderer_t {
   const char *fnname;
  public:
   void render_unsigned(unsigned v) {
-#ifdef HAVE_AS_LEB128
-    fprintf(fp, "\t.uleb128 %d\n", v);
-#else
+/* #ifdef HAVE_AS_LEB128 */
+/*     fprintf(fp, "\t.uleb128 %d\n", v); */
+/* #else */
     fprintf(fp, "\t.byte %d\n", v);
-#endif
+/* #endif */
   }
   
   void render_unsigned32(unsigned v) {
@@ -257,11 +257,11 @@ class dmd_renderer_t {
   
   void render_fn_relative_offset(dover_meta_data_label_t const *label) {
 #if 1
-#ifdef HAVE_AS_LEB128
-    fprintf(fp, "\t.uleb128 ");
-#else
+/* #ifdef HAVE_AS_LEB128 */
+/*     fprintf(fp, "\t.uleb128 "); */
+/* #else */
     fprintf(fp, "\t.word ");
-#endif
+/* #endif */
     label->render(fp);
     fprintf(fp, " - %s\n", fnname);
 #else
@@ -1992,7 +1992,8 @@ dmd_renderer_t dmd_renderer;
 static void
 flush_dover_meta_data(FILE *stream)
 {
-  gcc_assert(!dmd_prologue_authority);
+  /* gcc_assert(!dmd_prologue_authority); */
+  if (dmd_prologue_authority) return;
   // make sure that the epilogue gets closed out
   stack_policy_note_non_epilogue_inst(asm_out_file);
   dover_meta_data_label_t *l = NULL;
@@ -2484,7 +2485,7 @@ final_scan_insn (rtx_insn *insn, FILE *file, int optimize_p ATTRIBUTE_UNUSED,
   if (insn->deleted ())
     return NEXT_INSN (insn);
 
-  if (RTX_FRAME_RELATED_P (insn))
+  if (INSN_P(insn) && RTX_FRAME_RELATED_P (insn))
     if (past_prologue)
       stack_policy_note_epilogue_inst(asm_out_file);
     else
