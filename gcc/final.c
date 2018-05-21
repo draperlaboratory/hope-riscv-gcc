@@ -1992,8 +1992,7 @@ dmd_renderer_t dmd_renderer;
 static void
 flush_dover_meta_data(FILE *stream)
 {
-  /* gcc_assert(!dmd_prologue_authority); */
-  if (dmd_prologue_authority) return;
+  gcc_assert(!dmd_prologue_authority);
   // make sure that the epilogue gets closed out
   stack_policy_note_non_epilogue_inst(asm_out_file);
   dover_meta_data_label_t *l = NULL;
